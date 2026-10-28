@@ -1,0 +1,50 @@
+# LocalGenie: publishes a Windows ARM64 CPU build of sd-cli and sd-server as a GitHub release.
+# Upstream (leejet/stable-diffusion.cpp) ships no Windows ARM64 binary. Run this by hand after
+# syncing the fork; the release is tagged with the short commit it was built from.
+name: Windows ARM64 release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit of this repository to build
+        default: master
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: recursive
+
+      - name: Build (ARM64, CPU, static runtime)
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $cfg = "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSD_CUDA=OFF -DSD_VULKAN=OFF -DSD_OPENCL=OFF -DSD_HIPBLAS=OFF -DSD_METAL=OFF -DSD_SYCL=OFF -DSD_MUSA=OFF -DSD_BUILD_EXAMPLES=ON -DSD_WEBP=OFF -DSD_WEBM=OFF -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+          cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=arm64 -host_arch=arm64 -no_logo && $cfg && cmake --build build --parallel"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $sha = (git rev-parse --short=7 HEAD).Trim()
+          "SHORT_SHA=$sha" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build\bin\sd-cli.exe, build\bin\sd-server.exe, LICENSE dist\
+          Compress-Archive -Path dist\* -DestinationPath "sd-$sha-windows-arm64.zip"
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "arm64-$env:SHORT_SHA" "sd-$env:SHORT_SHA-windows-arm64.zip" `
+            --title "Windows ARM64 build $env:SHORT_SHA" `
+            --notes "CPU-only build of sd-cli and sd-server for Windows ARM64 from commit $env:SHORT_SHA. WebP and WebM output are off. Built for LocalGenie; not an official upstream release." `
+            --target $env:GITHUB_SHA
