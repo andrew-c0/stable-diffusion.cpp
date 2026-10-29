@@ -1,50 +1,110 @@
-# LocalGenie: publishes a Windows ARM64 CPU build of sd-cli and sd-server as a GitHub release.
-# Upstream (leejet/stable-diffusion.cpp) ships no Windows ARM64 binary. Run this by hand after
-# syncing the fork; the release is tagged with the short commit it was built from.
+# LocalGenie: builds sd-cli and sd-server for Windows ARM64 and publishes them as a GitHub release.
+# Upstream (leejet/stable-diffusion.cpp) ships no Windows ARM64 binary. This runs after the fork's
+# "CI" workflow succeeds on master (which happens when the fork is synced with upstream), or by
+# hand. The release is tagged arm64-<short commit>; an existing tag is left alone.
 name: Windows ARM64 release
 
 on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [master]
   workflow_dispatch:
     inputs:
       ref:
-        description: Branch, tag or commit of this repository to build
+        description: Full commit SHA, branch or tag of this repository to build
         default: master
 
 permissions:
   contents: write
 
+concurrency:
+  group: arm64-release-${{ github.event.workflow_run.head_sha || inputs.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: windows-11-arm
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ github.event.workflow_run.head_sha || inputs.ref }}
           submodules: recursive
 
-      - name: Build (ARM64, CPU, static runtime)
-        shell: pwsh
-        run: |
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $cfg = "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSD_CUDA=OFF -DSD_VULKAN=OFF -DSD_OPENCL=OFF -DSD_HIPBLAS=OFF -DSD_METAL=OFF -DSD_SYCL=OFF -DSD_MUSA=OFF -DSD_BUILD_EXAMPLES=ON -DSD_WEBP=OFF -DSD_WEBM=OFF -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
-          cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=arm64 -host_arch=arm64 -no_logo && $cfg && cmake --build build --parallel"
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-
-      - name: Package
+      - name: Resolve version
+        id: version
         shell: pwsh
         run: |
           $sha = (git rev-parse --short=7 HEAD).Trim()
-          "SHORT_SHA=$sha" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          gh release view "arm64-$sha" *> $null
+          $exists = ($LASTEXITCODE -eq 0)
+          "exists=$($exists.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          if ($exists) { Write-Host "Release arm64-$sha already exists, nothing to do." }
+
+      - name: Find clang-cl
+        id: clang
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $candidates = @(
+            "$vs\VC\Tools\Llvm\ARM64\bin\clang-cl.exe",
+            "$vs\VC\Tools\Llvm\bin\clang-cl.exe",
+            "C:\Program Files\LLVM\bin\clang-cl.exe"
+          )
+          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $found) { Write-Error "clang-cl not found on the runner. Looked in: $($candidates -join '; ')"; exit 1 }
+          & $found --version
+          "path=$found" >> $env:GITHUB_OUTPUT
+
+      - name: Make --list-devices flush stdout
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          # The Qualcomm OpenCL probe can leave stdout unflushed at exit, so the list printed nothing.
+          $f = "examples/common/common.cpp"
+          $text = Get-Content $f -Raw
+          if ($text -notmatch 'fputs\(devices\.data\(\), stdout\);\s*fflush\(stdout\);') {
+            $text = $text -replace 'fputs\(devices\.data\(\), stdout\);', "fputs(devices.data(), stdout);`n    fflush(stdout);"
+            Set-Content -NoNewline -Path $f -Value $text
+          }
+
+      - name: Build (ARM64, Clang, CPU, no OpenMP, static runtime)
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $cc = "${{ steps.clang.outputs.path }}"
+          $cfg = "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=`"$cc`" -DCMAKE_CXX_COMPILER=`"$cc`" -DSD_CUDA=OFF -DSD_VULKAN=OFF -DSD_OPENCL=OFF -DSD_HIPBLAS=OFF -DSD_METAL=OFF -DSD_SYCL=OFF -DSD_MUSA=OFF -DSD_BUILD_EXAMPLES=ON -DSD_WEBP=OFF -DSD_WEBM=OFF -DGGML_NATIVE=ON -DGGML_OPENMP=OFF -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+          cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=arm64 -host_arch=arm64 -no_logo && $cfg && cmake --build build --parallel"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Smoke test
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          .\build\bin\sd-cli.exe --list-devices
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Package
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $sha = "${{ steps.version.outputs.sha }}"
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item build\bin\sd-cli.exe, build\bin\sd-server.exe, LICENSE dist\
           Compress-Archive -Path dist\* -DestinationPath "sd-$sha-windows-arm64.zip"
 
       - name: Publish release
+        if: steps.version.outputs.exists != 'true'
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "arm64-$env:SHORT_SHA" "sd-$env:SHORT_SHA-windows-arm64.zip" `
-            --title "Windows ARM64 build $env:SHORT_SHA" `
-            --notes "CPU-only build of sd-cli and sd-server for Windows ARM64 from commit $env:SHORT_SHA. WebP and WebM output are off. Built for LocalGenie; not an official upstream release." `
-            --target $env:GITHUB_SHA
+          $sha = "${{ steps.version.outputs.sha }}"
+          gh release create "arm64-$sha" "sd-$sha-windows-arm64.zip" `
+            --title "Windows ARM64 build $sha" `
+            --notes "CPU build of sd-cli and sd-server for Windows ARM64 from commit $sha, compiled with Clang (no OpenMP, static runtime, so no extra DLLs). WebP and WebM output are off. --list-devices flushes its output. Built for LocalGenie; not an official upstream release." `
+            --target "${{ github.event.workflow_run.head_sha || github.sha }}"
