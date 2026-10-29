@@ -86,14 +86,16 @@ jobs:
         run: |
           # The loader (OpenCL.lib) is only linked against. At run time ggml-opencl.dll uses the
           # system OpenCL.dll from the Qualcomm GPU driver, so OpenCL.dll is not shipped.
-          $out = & .github/scripts/opencl-deps.ps1 -Work "$env:RUNNER_TEMP\opencl"
-          $code = $LASTEXITCODE
-          $out | Write-Host
-          if ($code -ne 0) { exit 1 }
-          foreach ($line in $out) {
-            if ($line -match '^OpenCL_INCLUDE_DIR=(.+)$') { "include=$($Matches[1])" >> $env:GITHUB_OUTPUT }
-            if ($line -match '^OpenCL_LIBRARY=(.+)$') { "library=$($Matches[1])" >> $env:GITHUB_OUTPUT }
-          }
+          $work = Join-Path $env:RUNNER_TEMP 'opencl'
+          & .github/scripts/opencl-deps.ps1 -Work $work
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # The script installs to <work>\install (see its last lines); read the paths from there.
+          $include = Join-Path $work 'install\include'
+          $library = Join-Path $work 'install\lib\OpenCL.lib'
+          if (-not (Test-Path (Join-Path $include 'CL\cl.h'))) { Write-Error "missing $include\CL\cl.h"; exit 1 }
+          if (-not (Test-Path $library)) { Write-Error "missing $library"; exit 1 }
+          "include=$include" >> $env:GITHUB_OUTPUT
+          "library=$library" >> $env:GITHUB_OUTPUT
 
       - name: Build (ARM64, Clang, CPU + OpenCL as loadable backends, fixed armv8.7a target, no OpenMP, static runtime)
         if: steps.version.outputs.exists != 'true'
