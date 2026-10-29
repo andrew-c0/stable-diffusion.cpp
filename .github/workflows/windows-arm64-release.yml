@@ -1,13 +1,12 @@
 # LocalGenie: builds sd-cli and sd-server for Windows ARM64 and publishes them as a GitHub release.
 # Upstream (leejet/stable-diffusion.cpp) ships no Windows ARM64 binary. This runs after the fork's
-# "CI" workflow succeeds on master (which happens when the fork is synced with upstream), or by
-# hand. The release is tagged arm64-<short commit>; an existing tag is left alone.
+# push to master (which happens when the fork is synced with upstream), or by hand. It does not wait
+# for the upstream CI matrix, which takes hours. The release is tagged arm64-<short commit>; an
+# existing tag is left alone.
 name: Windows ARM64 release
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
+  push:
     branches: [master]
   workflow_dispatch:
     inputs:
@@ -19,19 +18,18 @@ permissions:
   contents: write
 
 concurrency:
-  group: arm64-release-${{ github.event.workflow_run.head_sha || inputs.ref }}
+  group: arm64-release-${{ inputs.ref || github.sha }}
   cancel-in-progress: false
 
 jobs:
   build:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: windows-11-arm
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || inputs.ref }}
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
 
       - name: Resolve version
@@ -107,4 +105,4 @@ jobs:
           gh release create "arm64-$sha" "sd-$sha-windows-arm64.zip" `
             --title "Windows ARM64 build $sha" `
             --notes "CPU build of sd-cli and sd-server for Windows ARM64 from commit $sha, compiled with Clang (no OpenMP, static runtime, so no extra DLLs). WebP and WebM output are off. --list-devices flushes its output. Built for LocalGenie; not an official upstream release." `
-            --target "${{ github.event.workflow_run.head_sha || github.sha }}"
+            --target "${{ github.sha }}"
