@@ -42,6 +42,8 @@ jobs:
           $exists = ($LASTEXITCODE -eq 0)
           "exists=$($exists.ToString().ToLower())" >> $env:GITHUB_OUTPUT
           if ($exists) { Write-Host "Release arm64-$sha already exists, nothing to do." }
+          # `gh release view` exits 1 when the tag is new; do not let that fail the step.
+          exit 0
 
       - name: Find clang-cl
         id: clang
