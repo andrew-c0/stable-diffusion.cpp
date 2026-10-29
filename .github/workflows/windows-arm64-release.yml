@@ -73,13 +73,13 @@ jobs:
             Set-Content -NoNewline -Path $f -Value $text
           }
 
-      - name: Build (ARM64, Clang, CPU, no OpenMP, static runtime)
+      - name: Build (ARM64, Clang, CPU, fixed armv8.7a target, no OpenMP, static runtime)
         if: steps.version.outputs.exists != 'true'
         shell: pwsh
         run: |
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $cc = "${{ steps.clang.outputs.path }}"
-          $cfg = "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=`"$cc`" -DCMAKE_CXX_COMPILER=`"$cc`" -DSD_CUDA=OFF -DSD_VULKAN=OFF -DSD_OPENCL=OFF -DSD_HIPBLAS=OFF -DSD_METAL=OFF -DSD_SYCL=OFF -DSD_MUSA=OFF -DSD_BUILD_EXAMPLES=ON -DSD_WEBP=OFF -DSD_WEBM=OFF -DGGML_NATIVE=ON -DGGML_OPENMP=OFF -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+          $cfg = "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=`"$cc`" -DCMAKE_CXX_COMPILER=`"$cc`" -DSD_CUDA=OFF -DSD_VULKAN=OFF -DSD_OPENCL=OFF -DSD_HIPBLAS=OFF -DSD_METAL=OFF -DSD_SYCL=OFF -DSD_MUSA=OFF -DSD_BUILD_EXAMPLES=ON -DSD_WEBP=OFF -DSD_WEBM=OFF -DGGML_NATIVE=OFF -DCMAKE_C_FLAGS=`"-march=armv8.7a+fp16+dotprod+i8mm`" -DCMAKE_CXX_FLAGS=`"-march=armv8.7a+fp16+dotprod+i8mm`" -DGGML_OPENMP=OFF -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
           cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=arm64 -host_arch=arm64 -no_logo && $cfg && cmake --build build --parallel"
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
