@@ -1,0 +1,42 @@
+# LocalGenie: keeps this fork in step with leejet/stable-diffusion.cpp and builds the Windows ARM64
+# release for the new commit.
+# - Merges upstream master into this fork's master with GitHub's "sync fork" API (no extra token).
+# - Pushes made with the workflow token do not start other workflows, so the upstream CI matrix does
+#   not run on a sync, and the ARM64 build is started here by hand (workflow_dispatch is allowed).
+# - Starts the ARM64 build whenever master has no arm64-<short commit> release yet, which also
+#   retries a build that failed earlier.
+name: Sync upstream and build ARM64
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Merge upstream master
+        run: |
+          set -u
+          before=$(gh api "repos/$GITHUB_REPOSITORY/branches/master" --jq .commit.sha)
+          if ! out=$(gh api -X POST "repos/$GITHUB_REPOSITORY/merge-upstream" -f branch=master 2>&1); then
+            echo "Sync failed: $out"
+            exit 1
+          fi
+          echo "$out"
+          after=$(gh api "repos/$GITHUB_REPOSITORY/branches/master" --jq .commit.sha)
+          echo "master: $before -> $after"
+          short=${after:0:7}
+          if gh release view "arm64-$short" >/dev/null 2>&1; then
+            echo "Release arm64-$short already exists; no build needed."
+          else
+            echo "No release arm64-$short yet; starting the ARM64 build."
+            gh workflow run windows-arm64-release.yml --repo "$GITHUB_REPOSITORY" -f ref="$after"
+          fi
