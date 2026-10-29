@@ -1,7 +1,8 @@
-# LocalGenie: builds sd-cli and sd-server for Windows ARM64 and publishes them as a GitHub release.
-# Upstream (leejet/stable-diffusion.cpp) ships no Windows ARM64 binary. This runs after the fork's
-# push to master (which happens when the fork is synced with upstream), or by hand. It does not wait
-# for the upstream CI matrix, which takes hours. The release is tagged arm64-<short commit>; an
+# LocalGenie: builds sd-cli and sd-server for Windows ARM64 (CPU + OpenCL for the Adreno GPU) and
+# publishes them as a GitHub release.
+# Upstream (leejet/stable-diffusion.cpp) ships no Windows ARM64 binary. This runs on a push to
+# master (which happens when the fork is synced with upstream), or by hand. It does not wait for
+# the upstream CI matrix, which takes hours. The release is tagged arm64-<short commit>; an
 # existing tag is left alone.
 name: Windows ARM64 release
 
@@ -45,6 +46,11 @@ jobs:
           # `gh release view` exits 1 when the tag is new; do not let that fail the step.
           exit 0
 
+      - uses: actions/setup-python@v5
+        if: steps.version.outputs.exists != 'true'
+        with:
+          python-version: '3.12'
+
       - name: Find clang-cl
         id: clang
         if: steps.version.outputs.exists != 'true'
@@ -73,22 +79,65 @@ jobs:
             Set-Content -NoNewline -Path $f -Value $text
           }
 
-      - name: Build (ARM64, Clang, CPU, fixed armv8.7a target, no OpenMP, static runtime)
+      - name: Build the OpenCL headers and loader (link-time only)
+        id: opencl
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          # The loader (OpenCL.lib) is only linked against. At run time ggml-opencl.dll uses the
+          # system OpenCL.dll from the Qualcomm GPU driver, so OpenCL.dll is not shipped.
+          $out = & .github/scripts/opencl-deps.ps1 -Work "$env:RUNNER_TEMP\opencl"
+          $code = $LASTEXITCODE
+          $out | Write-Host
+          if ($code -ne 0) { exit 1 }
+          foreach ($line in $out) {
+            if ($line -match '^OpenCL_INCLUDE_DIR=(.+)$') { "include=$($Matches[1])" >> $env:GITHUB_OUTPUT }
+            if ($line -match '^OpenCL_LIBRARY=(.+)$') { "library=$($Matches[1])" >> $env:GITHUB_OUTPUT }
+          }
+
+      - name: Build (ARM64, Clang, CPU + OpenCL as loadable backends, fixed armv8.7a target, no OpenMP, static runtime)
         if: steps.version.outputs.exists != 'true'
         shell: pwsh
         run: |
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $env:PATH = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer;" + $env:PATH
+          $envLines = cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=arm64 -host_arch=arm64 -no_logo >nul && set"
+          foreach ($l in $envLines) {
+            $i = $l.IndexOf('=')
+            if ($i -gt 0) { Set-Item -Path ('env:' + $l.Substring(0, $i)) -Value $l.Substring($i + 1) -ErrorAction SilentlyContinue }
+          }
           $cc = "${{ steps.clang.outputs.path }}"
-          $cfg = "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=`"$cc`" -DCMAKE_CXX_COMPILER=`"$cc`" -DSD_CUDA=OFF -DSD_VULKAN=OFF -DSD_OPENCL=OFF -DSD_HIPBLAS=OFF -DSD_METAL=OFF -DSD_SYCL=OFF -DSD_MUSA=OFF -DSD_BUILD_EXAMPLES=ON -DSD_WEBP=OFF -DSD_WEBM=OFF -DGGML_NATIVE=OFF -DCMAKE_C_FLAGS=`"/DWIN32 /D_WINDOWS -march=armv8.7a+fp16+dotprod+i8mm`" -DCMAKE_CXX_FLAGS=`"/DWIN32 /D_WINDOWS /GR /EHsc -march=armv8.7a+fp16+dotprod+i8mm`" -DGGML_OPENMP=OFF -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
-          cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=arm64 -host_arch=arm64 -no_logo && $cfg && cmake --build build --parallel"
+          $arch = "-march=armv8.7a+fp16+dotprod+i8mm"
+          $py = (Get-Command python).Source
+          $cmakeArgs = @(
+            '-S', '.', '-B', 'build', '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
+            "-DCMAKE_C_COMPILER=$cc", "-DCMAKE_CXX_COMPILER=$cc",
+            '-DBUILD_SHARED_LIBS=ON', '-DSD_BUILD_SHARED_LIBS=ON', '-DSD_BUILD_SHARED_GGML_LIB=ON',
+            '-DGGML_BACKEND_DL=ON', '-DGGML_CPU_ALL_VARIANTS=OFF', '-DGGML_OPENMP=OFF', '-DGGML_NATIVE=OFF',
+            '-DSD_CUDA=OFF', '-DSD_VULKAN=OFF', '-DSD_OPENCL=ON', '-DSD_HIPBLAS=OFF', '-DSD_METAL=OFF',
+            '-DSD_SYCL=OFF', '-DSD_MUSA=OFF', '-DSD_BUILD_EXAMPLES=ON', '-DSD_WEBP=OFF', '-DSD_WEBM=OFF',
+            "-DCMAKE_C_FLAGS=/DWIN32 /D_WINDOWS $arch",
+            "-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc $arch",
+            '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW', '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded',
+            "-DOpenCL_INCLUDE_DIR=${{ steps.opencl.outputs.include }}",
+            "-DOpenCL_LIBRARY=${{ steps.opencl.outputs.library }}",
+            "-DPython3_EXECUTABLE=$py"
+          )
+          cmake @cmakeArgs
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cmake --build build --parallel
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Smoke test
         if: steps.version.outputs.exists != 'true'
         shell: pwsh
         run: |
-          .\build\bin\sd-cli.exe --list-devices
+          # The runner has no Adreno GPU: only the CPU is expected here.
+          $out = & .\build\bin\sd-cli.exe --list-devices
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          $out | Write-Host
+          if (-not ($out -match '^CPU')) { Write-Error "CPU device not listed"; exit 1 }
+          exit 0
 
       - name: Package
         if: steps.version.outputs.exists != 'true'
@@ -97,6 +146,8 @@ jobs:
           $sha = "${{ steps.version.outputs.sha }}"
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item build\bin\sd-cli.exe, build\bin\sd-server.exe, LICENSE dist\
+          Get-ChildItem build\bin\*.dll | Where-Object { $_.Name -ne 'OpenCL.dll' } | Copy-Item -Destination dist\
+          Get-ChildItem dist | Select-Object Name, Length | Format-Table | Out-String | Write-Host
           Compress-Archive -Path dist\* -DestinationPath "sd-$sha-windows-arm64.zip"
 
       - name: Publish release
@@ -106,5 +157,5 @@ jobs:
           $sha = "${{ steps.version.outputs.sha }}"
           gh release create "arm64-$sha" "sd-$sha-windows-arm64.zip" `
             --title "Windows ARM64 build $sha" `
-            --notes "CPU build of sd-cli and sd-server for Windows ARM64 from commit $sha, compiled with Clang (no OpenMP, static runtime, so no extra DLLs). WebP and WebM output are off. --list-devices flushes its output. Built for LocalGenie; not an official upstream release." `
+            --notes "CPU and OpenCL (Adreno GPU) build of sd-cli and sd-server for Windows ARM64 from commit $sha, compiled with Clang. The GPU backend is a separate DLL that is skipped when no OpenCL driver is present. No OpenMP, static runtime, so no extra DLLs. WebP and WebM output are off. --list-devices flushes its output. Built for LocalGenie; not an official upstream release." `
             --target "${{ github.sha }}"
