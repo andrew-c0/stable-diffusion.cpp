@@ -159,5 +159,5 @@ jobs:
           $sha = "${{ steps.version.outputs.sha }}"
           gh release create "arm64-$sha" "sd-$sha-windows-arm64.zip" `
             --title "Windows ARM64 build $sha" `
-            --notes "CPU and OpenCL (Adreno GPU) build of sd-cli and sd-server for Windows ARM64 from commit $sha, compiled with Clang. The GPU backend is a separate DLL that is skipped when no OpenCL driver is present. No OpenMP, static runtime, so no extra DLLs. WebP and WebM output are off. --list-devices flushes its output. Built for LocalGenie; not an official upstream release." `
+            --notes "CPU and OpenCL (Adreno GPU) build of sd-cli and sd-server for Windows ARM64 from commit $sha, compiled with Clang. The GPU backend is a separate DLL that is skipped when no OpenCL driver is present. No OpenMP, static runtime, so no extra DLLs. WebP and WebM output are off. --list-devices flushes its output. Known issue: on the Adreno OpenCL backend a CFG scale above 1 gives a blank image unless batched CFG is turned off (pass --batched-cfg off); re-test after each ggml update. Built for LocalGenie; not an official upstream release." `
             --target "${{ github.sha }}"
