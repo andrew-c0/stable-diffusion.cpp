@@ -1,8 +1,10 @@
 # LocalGenie: keeps this fork in step with leejet/stable-diffusion.cpp and builds the Windows ARM64
 # release for the new commit.
-# - Merges upstream master into this fork's master with GitHub's "sync fork" API (no extra token).
-# - Pushes made with the workflow token do not start other workflows, so the upstream CI matrix does
-#   not run on a sync, and the ARM64 build is started here by hand (workflow_dispatch is allowed).
+# - Merges upstream master into this fork's master with GitHub's "sync fork" API, using the
+#   SYNC_TOKEN secret (fine-grained PAT, Contents + Workflows read/write): the built-in token is
+#   refused when upstream changes a file under .github/workflows.
+# - The ARM64 build is started here by hand (workflow_dispatch). A push made with SYNC_TOKEN may also
+#   start the push-triggered build; the second one finds the release tag and leaves it alone.
 # - Starts the ARM64 build whenever master has no arm64-<short commit> release yet, which also
 #   retries a build that failed earlier.
 name: Sync upstream and build ARM64
@@ -23,10 +25,12 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Merge upstream master
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
           set -u
           before=$(gh api "repos/$GITHUB_REPOSITORY/branches/master" --jq .commit.sha)
-          if ! out=$(gh api -X POST "repos/$GITHUB_REPOSITORY/merge-upstream" -f branch=master 2>&1); then
+          if ! out=$(GH_TOKEN="$SYNC_TOKEN" gh api -X POST "repos/$GITHUB_REPOSITORY/merge-upstream" -f branch=master 2>&1); then
             echo "Sync failed: $out"
             exit 1
           fi
