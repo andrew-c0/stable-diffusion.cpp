@@ -10,10 +10,6 @@
 #include "graph.h"
 #include "result.h"
 
-struct sd_dgl_ctx_t : sd::dgl::Context {
-    using Context::Context;
-};
-
 namespace {
     using namespace sd::dgl;
 
@@ -35,7 +31,7 @@ namespace {
         if (!ctx)
             throw Error(SD_STATUS_INVALID_ARGUMENT, "context is required");
         std::unique_lock<std::mutex> lock(ctx->mutex, std::try_to_lock);
-        if (!lock.owns_lock() || ctx->active_run)
+        if (!lock.owns_lock() || ctx->active_run || ctx->generating)
             throw Error(SD_STATUS_BUSY, "DGL context is busy");
         return lock;
     }
@@ -143,6 +139,20 @@ bool sd_dgl_ctx_set(sd_dgl_ctx_t* ctx, const char* key, const char* value) {
                auto lock = lock_idle(ctx);
                ctx->set(key, value);
            }) == SD_STATUS_OK;
+}
+
+sd_status_t sd_dgl_ctx_release_staging(sd_dgl_ctx_t* ctx) {
+    return api_call([&] {
+        auto lock = lock_idle(ctx);
+        ctx->models->release_idle_gpu_staging();
+    });
+}
+
+sd_status_t sd_dgl_ctx_unload_models(sd_dgl_ctx_t* ctx) {
+    return api_call([&] {
+        auto lock = lock_idle(ctx);
+        ctx->unload_models();
+    });
 }
 
 bool sd_dgl_ctx_set_file_access_callback(sd_dgl_ctx_t* ctx, sd_dgl_file_access_cb_t callback, void* userdata) {

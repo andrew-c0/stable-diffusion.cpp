@@ -13,6 +13,7 @@
 #include "dgl/model_value.h"
 #include "dgl/models/component_sources.h"
 #include "dgl/models/lora.h"
+#include "dgl/run_events.h"
 
 namespace sd::dgl {
 
@@ -48,6 +49,18 @@ namespace sd::dgl {
         LOG_VERBOSE("DGL unloaded idle %s", type_name(oldest->second.value.type()).c_str());
         resources.erase(oldest);
         return true;
+    }
+
+    void Context::unload_models() {
+        const auto cached = resources.size();
+        for (auto it = resources.begin(); it != resources.end();) {
+            if (is_model_kind(it->second.value.type().kind))
+                it = resources.erase(it);
+            else
+                ++it;
+        }
+        if (const auto unloaded = cached - resources.size(); unloaded != 0)
+            LOG_VERBOSE("DGL unloaded %zu cached model components", unloaded);
     }
 
     static size_t parse_max_ram(const std::string& value) {
@@ -102,12 +115,7 @@ namespace sd::dgl {
             current = enabled;
         }
         // Runner sessions and weight storage take their settings from the model at initialization.
-        for (auto it = resources.begin(); it != resources.end();) {
-            if (is_model_kind(it->second.value.type().kind))
-                it = resources.erase(it);
-            else
-                ++it;
-        }
+        unload_models();
     }
 
     void Context::set(const std::string& key, const std::string& value) {
@@ -203,6 +211,8 @@ namespace sd::dgl {
             return std::move(*value);
         }
         const bool model = is_model_kind(kind);
+        if (model)
+            report_run_progress("loading");
         ResourceLoadRequest request{*this, model ? identity.first : ""};
         auto value        = prepared.load(request);
         auto dependencies = model ? model_from_value(value).dependencies() : ModelLoader::Dependencies{};

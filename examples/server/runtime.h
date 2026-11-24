@@ -24,6 +24,8 @@ struct SDSvrParams {
     int listen_port           = 1234;
     int max_pending_jobs      = 64;
     int completed_ttl_seconds = 600;
+    int weight_staging_ttl    = -1;
+    int weight_residency_ttl  = -1;
     std::string serve_html_path;
     std::string dgl_dir = "dgl";
     std::vector<std::string> model_dirs;
@@ -51,7 +53,6 @@ struct UpscalerEntry {
     std::string fullpath;
     std::string model_name;
     int scale                = 4;
-    int image_upscale_factor = 0;
     uintmax_t file_size      = 0;
     std::filesystem::file_time_type last_modified;
 };
@@ -140,7 +141,9 @@ bool assign_output_options(VidGenJobRequest& request,
                            std::string& error_message);
 std::string video_mime_type(const std::string& output_format);
 bool runtime_supports_generation_mode(const ServerRuntime& runtime, SDMode mode);
-void prepare_native_context(ServerModels& models, const SDSvrParams& params, const SDContextParams& config, bool startup = false);
+bool has_current_model(const ServerRuntime& runtime);
+void configure_server_file_access(ServerModels& models, const SDSvrParams& params, const SDContextParams& config);
+bool generate_server_images(sd_ctx_t* ctx, ImgGenJobRequest& request, SDImageVec& results, std::string& error_message);
 std::string unsupported_generation_mode_error(SDMode mode);
 void refresh_lora_cache(ServerRuntime& rt);
 std::string get_lora_full_path(ServerRuntime& rt, const std::string& path);

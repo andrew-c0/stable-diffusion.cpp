@@ -33,6 +33,7 @@ namespace sd::dgl {
 
         std::mutex mutex;
         RunEvents* active_run = nullptr;
+        bool generating       = false;
         RunCallbacks callbacks;
         FileAccessPolicy file_access;
         std::shared_ptr<SDBackendPool> backends = std::make_shared<SDBackendPool>();
@@ -50,6 +51,7 @@ namespace sd::dgl {
         Value derive_model(const Value& base, std::shared_ptr<const models::LoraConfig> loras);
         bool evict_idle_resource();
         void prune_expired_resources();
+        void unload_models();
 
         sd::ParallelExecutor* tensor_executor() const { return model_execution_.tensor_executor.get(); }
         bool auto_fit() const { return auto_fit_; }
@@ -72,5 +74,9 @@ namespace sd::dgl {
     };
 
 }  // namespace sd::dgl
+
+struct sd_dgl_ctx_t : sd::dgl::Context {
+    using Context::Context;
+};
 
 #endif  // __SD_DGL_CONTEXT_H__
