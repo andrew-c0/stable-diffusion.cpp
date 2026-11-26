@@ -360,14 +360,17 @@ SD_API sd_dgl_ctx_t* sd_dgl_ctx_create_once(void);
 SD_API void sd_dgl_ctx_free(sd_dgl_ctx_t* ctx);
 // Sets options on an idle context: max_vram, max_ram, conditioning_cache_size, batched_cfg,
 // n_threads, auto_fit, enable_mmap, eager_load, disable_prefetch, disable_segmented_compute,
-// embed_metadata (default on; controls generation metadata in DGL image/video saves).
+// embed_metadata (default on; controls generation metadata in DGL image/video saves),
+// console_progress (default off; keeps built-in progress output alongside callbacks).
 // Threading, placement and weight-loading options invalidate cached models when changed.
 SD_API bool sd_dgl_ctx_set(sd_dgl_ctx_t* ctx, const char* key, const char* value);
 
 // Releases idle GPU staging buffers that have RAM originals.
+// Clears idle buffer caches on supported backends.
 // Returns SD_STATUS_BUSY during DGL execution or generation.
 SD_API sd_status_t sd_dgl_ctx_release_staging(sd_dgl_ctx_t* ctx);
-// Unloads cached model components. The context keeps its settings and callbacks.
+// Unloads cached model components and clears idle buffer caches on supported backends.
+// The context keeps its settings and callbacks.
 // Subsequent requests reload components as needed. Returns SD_STATUS_BUSY during execution.
 SD_API sd_status_t sd_dgl_ctx_unload_models(sd_dgl_ctx_t* ctx);
 

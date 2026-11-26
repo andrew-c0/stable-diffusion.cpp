@@ -1,11 +1,13 @@
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include "httplib.h"
+// cpp-httplib must include Winsock2 before other headers include windows.h.
+#include "server_access.h"
 
 #include "async_jobs.h"
 #include "common/common.h"
@@ -39,6 +41,7 @@ static void parse_args(int argc,
         ctx_params.get_options(),
         default_gen_params.get_options(),
     };
+    svr_params.add_access_options(options_vec[0], options_vec);
 
     if (!parse_options(argc, argv, options_vec)) {
         print_usage(argv[0], options_vec);
@@ -101,6 +104,8 @@ int main(int argc, const char** argv) {
     }
     try {
         configure_server_file_access(models, svr_params, ctx_params);
+        if (!sd_dgl_ctx_set(sd_ctx_get_dgl_ctx(models.context.get()), "console_progress", "on"))
+            throw std::runtime_error(sd_dgl_error());
     } catch (const std::exception& error) {
         LOG_ERROR("Context setup failed: %s", error.what());
         return 1;
@@ -140,24 +145,7 @@ int main(int argc, const char** argv) {
 
     std::thread async_worker(async_job_worker, std::ref(runtime));
 
-    httplib::Server svr;
-
-    svr.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
-        std::string origin = req.get_header_value("Origin");
-        if (origin.empty()) {
-            origin = "*";
-        }
-        res.set_header("Access-Control-Allow-Origin", origin);
-        res.set_header("Access-Control-Allow-Credentials", "true");
-        res.set_header("Access-Control-Allow-Methods", "*");
-        res.set_header("Access-Control-Allow-Headers", "*");
-
-        if (req.method == "OPTIONS") {
-            res.status = 204;
-            return httplib::Server::HandlerResponse::Handled;
-        }
-        return httplib::Server::HandlerResponse::Unhandled;
-    });
+    SDHttpServer svr(svr_params);
 
     std::string index_html;
 #ifdef HAVE_INDEX_HTML
@@ -166,6 +154,7 @@ int main(int argc, const char** argv) {
     index_html = "Stable Diffusion Server is running";
 #endif
     register_index_endpoints(svr, svr_params, index_html);
+    register_media_view_endpoint(svr, svr_params);
     register_openai_api_endpoints(svr, runtime);
     register_sdapi_endpoints(svr, runtime);
     register_sdcpp_api_endpoints(svr, runtime);

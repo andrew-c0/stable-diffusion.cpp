@@ -318,6 +318,7 @@ ArgOptions SDSvrParams::get_options() {
 
     options.bool_options = {
         {"", "--color", "colors the logging tags according to level", true, &color},
+        {"", "--no-media-view", "disable media file viewing", false, &media_view},
     };
 
     auto on_help_arg = [&](int, const char**, int, bool& valid) {
@@ -383,10 +384,7 @@ bool SDSvrParams::validate() {
 }
 
 bool SDSvrParams::resolve_and_validate() {
-    if (!validate()) {
-        return false;
-    }
-    return true;
+    return validate() && load_api_keys();
 }
 
 std::string SDSvrParams::to_string() const {
@@ -401,6 +399,9 @@ std::string SDSvrParams::to_string() const {
         << "  weight_residency_ttl: " << weight_residency_ttl << ",\n"
         << "  serve_html_path: \"" << serve_html_path << "\",\n"
         << "  dgl_dir: \"" << dgl_dir << "\",\n"
+        << "  api_keys: " << api_keys.size() << ",\n"
+        << "  cors_origins: " << cors_origins.size() << ",\n"
+        << "  media_view: " << std::boolalpha << media_view << ",\n"
         << "}";
     return oss.str();
 }
